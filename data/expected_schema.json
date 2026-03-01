@@ -1,0 +1,36 @@
+{
+  "datasets": {
+    "customers": {
+      "primary_key": "customer_id",
+      "required_columns": ["customer_id", "name", "email", "signup_date"],
+      "integer_columns": ["customer_id"],
+      "email_columns": ["email"],
+      "date_columns": ["signup_date"]
+    },
+    "orders": {
+      "primary_key": "order_id",
+      "required_columns": ["order_id", "customer_id", "order_amount", "order_date"],
+      "integer_columns": ["order_id", "customer_id"],
+      "numeric_columns": ["order_amount"],
+      "positive_numeric_columns": ["order_amount"],
+      "date_columns": ["order_date"]
+    }
+  },
+  "database": {
+    "required_tables": [
+      "customers",
+      "orders",
+      "backup_customers_csv",
+      "backup_orders_json"
+    ],
+    "consistency_views": [
+      "check_customer_count_mismatch",
+      "check_missing_customers_in_backup_csv",
+      "check_extra_customers_in_backup_csv",
+      "check_order_count_mismatch",
+      "check_missing_orders_in_backup_json",
+      "check_extra_orders_in_backup_json",
+      "check_order_amount_mismatch"
+    ]
+  }
+}
