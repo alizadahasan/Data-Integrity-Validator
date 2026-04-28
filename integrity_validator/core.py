@@ -307,6 +307,7 @@ class DataIntegrityValidator:
                         )
                     )
                 else:
+                    # Normalize primary key by converting to string and stripping whitespace
                     normalized_key = str(pk_value).strip()
                     if normalized_key in seen_keys:
                         issues.append(
@@ -437,26 +438,26 @@ class DataIntegrityValidator:
             )
             return issues
 
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-
         try:
-            integrity_row = connection.execute("PRAGMA integrity_check;").fetchone()
-            integrity_status = str(integrity_row[0]) if integrity_row else "unknown"
-            if integrity_status.lower() != "ok":
-                issues.append(
-                    ValidationIssue(
-                        severity="high",
-                        category="database",
-                        location=str(self.db_path),
-                        message="SQLite integrity check failed.",
-                        details={"status": integrity_status},
-                    )
-                )
+            with sqlite3.connect(self.db_path) as connection:
+                connection.row_factory = sqlite3.Row
 
-            issues.extend(self._validate_required_tables(connection))
-            issues.extend(self._run_source_table_anomaly_queries(connection))
-            issues.extend(self._run_sql_consistency_views(connection))
+                integrity_row = connection.execute("PRAGMA integrity_check;").fetchone()
+                integrity_status = str(integrity_row[0]) if integrity_row else "unknown"
+                if integrity_status.lower() != "ok":
+                    issues.append(
+                        ValidationIssue(
+                            severity="high",
+                            category="database",
+                            location=str(self.db_path),
+                            message="SQLite integrity check failed.",
+                            details={"status": integrity_status},
+                        )
+                    )
+
+                issues.extend(self._validate_required_tables(connection))
+                issues.extend(self._run_source_table_anomaly_queries(connection))
+                issues.extend(self._run_sql_consistency_views(connection))
         except sqlite3.DatabaseError as exc:
             issues.append(
                 ValidationIssue(
@@ -467,8 +468,6 @@ class DataIntegrityValidator:
                     details={"error": str(exc)},
                 )
             )
-        finally:
-            connection.close()
 
         return issues
 
@@ -569,13 +568,39 @@ class DataIntegrityValidator:
             return issues
 
         sql_script = self.sql_checks_path.read_text(encoding="utf-8")
-        connection.executescript(sql_script)
+        
+        try:
+            connection.executescript(sql_script)
+        except sqlite3.DatabaseError as exc:
+            issues.append(
+                ValidationIssue(
+                    severity="high",
+                    category="sql_check",
+                    location=str(self.sql_checks_path),
+                    message="Failed to execute SQL consistency check script.",
+                    details={"error": str(exc)},
+                )
+            )
+            return issues
 
         view_names: list[str] = self.schema.get("database", {}).get(
             "consistency_views", []
         )
         for view_name in view_names:
             try:
+                # Validate view name to prevent SQL injection
+                if not self._is_valid_identifier(view_name):
+                    issues.append(
+                        ValidationIssue(
+                            severity="high",
+                            category="sql_check",
+                            location=view_name,
+                            message="Invalid view name format.",
+                            details={"view_name": view_name},
+                        )
+                    )
+                    continue
+                    
                 rows = connection.execute(f"SELECT * FROM {view_name};").fetchall()
             except sqlite3.DatabaseError as exc:
                 issues.append(
@@ -623,3 +648,11 @@ class DataIntegrityValidator:
         if isinstance(value, str) and value.strip() == "":
             return True
         return False
+
+    @staticmethod
+    def _is_valid_identifier(name: str) -> bool:
+        """Validate that a name is a valid SQL identifier to prevent SQL injection."""
+        if not name:
+            return False
+        # Allow alphanumeric characters, underscores, and ensure it doesn't start with a digit
+        return bool(re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name))
